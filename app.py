@@ -109,10 +109,22 @@ def train_lstm(df):
     except: return 50
 
 def get_btc_bias():
-    df_btc = get_data("bitcoin", interval="1h")
-    if df_btc is None: return "نامشخص", "⚪"
-    last_p, ema = df_btc['price'].iloc[-1], df_btc['price'].ewm(span=50).mean().iloc[-1]
-    return ("صعودی 🟢", "BULLISH") if last_p > ema else ("نزولی 🔴", "BEARISH")
+    try:
+        df_btc = get_data("bitcoin", interval="1h")
+        # بررسی اینکه آیا دیتا دریافت شده و خالی نیست
+        if df_btc is None or df_btc.empty or len(df_btc) < 50:
+            return "در حال بارگذاری... ⏳", "UNKNOWN"
+            
+        last_p = df_btc['price'].iloc[-1]
+        ema = df_btc['price'].ewm(span=50).mean().iloc[-1]
+        
+        if last_p > ema:
+            return "صعودی 🟢", "BULLISH"
+        else:
+            return "نزولی 🔴", "BEARISH"
+    except Exception as e:
+        # در صورت هرگونه خطا، برنامه کرش نمی‌کند
+        return "عدم دسترسی به دیتا ⚪", "UNKNOWN"
 
 # ==========================================
 # ۳. رابط کاربری اپلیکیشن (STREAMLIT UI)
