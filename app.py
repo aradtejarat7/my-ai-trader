@@ -1,3 +1,146 @@
+# سلول اول: نصب کتابخانه‌ها و پیکربندی تنظیمات
+# نصب کتابخانه‌های مورد نیاز (ta برای اندیکاتورها و nest_asyncio برای اجرای async در کولب)
+!pip install ta nest_asyncio -q
+
+import asyncio
+import time
+import requests
+import numpy as np
+import pandas as pd
+from datetime import datetime
+
+# کتابخانه‌های یادگیری ماشین (Machine Learning)
+from sklearn.preprocessing import MinMaxScaler
+from xgboost import XGBClassifier
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras import backend as K # برای پاکسازی حافظه رم
+
+# کتابخانه تحلیل تکنیکال
+import ta
+
+# فعال‌سازی محیط ناهمگام برای جلوگیری از فریز شدن در گوگل کولب
+import nest_asyncio
+nest_asyncio.apply()
+
+# =========================
+# تنظیمات اصلی (CONFIG)
+# =========================
+# توکن ربات تلگرام و آی‌دی چت شما
+TOKEN = "8548739067:AAGuvMHgB-LxOoyQIrHWzs6ytTfOehfIrco"
+CHAT_ID = "163583693"
+
+# لیست ارزهایی که می‌خواهید تحلیل شوند (نام برای API و نماد برای نمایش)
+CRYPTOS = {
+    "bitcoin": "BTC",
+    "ethereum": "ETH",
+    "ripple": "XRP"
+}
+
+# تنظیمات زمانی و معاملاتی
+INTERVAL_SECONDS = 300   # زمان بین هر تحلیل (۵ دقیقه)
+CANDLES = 1000           # تعداد کندل‌های مورد بررسی برای آموزش مدل
+POSITION_SIZE = 1500     # حجم فرضی هر معامله به دلار
+RISK_REWARD = "1:1.20"   # نسبت ریسک به ریوارد برای نمایش در پیام
+
+
+# سلول دوم: توابع ارتباطی، دریافت داده‌های زنده (Spot & Futures) و محاسبه اندیکاتورها
+
+def send_telegram(text):
+    """ارسال پیام متنی به تلگرام"""
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    try:
+        requests.post(url, data={"chat_id": CHAT_ID, "text": text}, timeout=30)
+    except Exception as e:
+        print(f"خطا در تلگرام: {e}")
+
+def get_futures_info(symbol):
+    """دریافت داده‌های Open Interest و Funding Rate از بازار فیوچرز بایننس"""
+    try:
+        # دریافت نرخ تامین مالی (Funding Rate)
+        fund_url = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={symbol}"
+        fund_data = requests.get(fund_url, timeout=10).json()
+        funding_rate = float(fund_data.get("lastFundingRate", 0)) * 100 # تبدیل به درصد
+
+        # دریافت Open Interest
+        oi_url = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}"
+        oi_data = requests.get(oi_url, timeout=10).json()
+        open_interest = float(oi_data.get("openInterest", 0))
+
+        return funding_rate, open_interest
+    except:
+        return 0.0, 0.0
+
+def get_data(coin, interval="1h"): # تغییر پیش‌فرض به 1 ساعته طبق درخواست شما
+    """دریافت داده‌های قیمت و حجم از بایننس"""
+    symbol_map = {"bitcoin": "BTCUSDT", "ethereum": "ETHUSDT", "ripple": "XRPUSDT"}
+    symbol = symbol_map.get(coin, "BTCUSDT")
+
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={CANDLES}"
+
+    try:
+        r = requests.get(url, timeout=20)
+        if r.status_code != 200: return None
+        data = r.json()
+
+        df = pd.DataFrame(data, columns=[
+            "ts", "open", "high", "low", "close", "volume",
+            "close_time", "qav", "num_trades", "taker_base", "taker_quote", "ignore"
+        ])
+
+        df["ts"] = pd.to_datetime(df["ts"], unit="ms")
+        df["price"] = df["close"].astype(float)
+        df["high"] = df["high"].astype(float)
+        df["low"] = df["low"].astype(float)
+        df["volume"] = df["volume"].astype(float) # اضافه شدن ستون حجم
+
+        df.set_index("ts", inplace=True)
+
+        # دریافت اطلاعات تکمیلی فیوچرز
+        funding, oi = get_futures_info(symbol)
+        df["funding_rate"] = funding
+        df["open_interest"] = oi
+
+        return df[["price", "high", "low", "volume", "funding_rate", "open_interest"]]
+    except Exception as e:
+        print(f"خطا در دریافت داده: {e}")
+        return None
+
+def add_indicators(df):
+    """اضافه کردن شاخص‌های ارتقا یافته (RSI, MACD, ADX, ATR, Vol Ratio)"""
+    try:
+        # ۱. شاخص RSI
+        df["rsi"] = ta.momentum.RSIIndicator(df["price"]).rsi()
+
+        # ۲. شاخص MACD
+        macd = ta.trend.MACD(df["price"])
+        df["macd"] = macd.macd_diff()
+
+        # ۳. شاخص ADX (تشخیص قدرت روند)
+        adx_ind = ta.trend.ADXIndicator(df["high"], df["low"], df["price"], window=14)
+        df["adx"] = adx_ind.adx()
+
+        # ۴. میانگین متحرک (EMA 20)
+        df["ema"] = ta.trend.EMAIndicator(df["price"], 20).ema_indicator()
+
+        # ۵. شاخص ATR (نوسان‌سنجی)
+        df["atr"] = ta.volatility.AverageTrueRange(df["high"], df["low"], df["price"]).average_true_range()
+
+        # ۶. نسبت حجم (Volume Ratio) - نسبت حجم فعلی به میانگین ۲۰ کندل اخیر
+        df["vol_ratio"] = df["volume"] / df["volume"].rolling(window=20).mean()
+
+        # ۷. محاسبه تغییر Open Interest (نسبت به کندل قبل)
+        df["oi_change"] = df["open_interest"].pct_change() * 100
+
+        df.dropna(inplace=True)
+        return df
+    except Exception as e:
+        print(f"خطا در محاسبات تکنیکال: {e}")
+        return df
+
+
+
+
 # سلول سوم: موتور جامع تحلیل v13.0 - ترکیب کامل ML + مدیریت سرمایه + تاییدیه طلایی
 import numpy as np
 import pandas as pd
