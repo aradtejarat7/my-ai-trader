@@ -1,29 +1,36 @@
 import ta
 import numpy as np
-from xgboost import XGBClassifier
 
-def get_market_regime(df):
+def add_indicators(df):
+    df["rsi"] = ta.momentum.RSIIndicator(df["price"]).rsi()
+    df["adx"] = ta.trend.ADXIndicator(df["high"], df["low"], df["price"]).adx()
+    df["ema"] = ta.trend.EMAIndicator(df["price"], 20).ema_indicator()
+    df["atr"] = ta.volatility.AverageTrueRange(df["high"], df["low"], df["price"]).average_true_range()
+    return df.dropna()
+
+def calculate_trade_details(df, capital, risk_pct):
+    price = df['price'].iloc[-1]
+    atr = df['atr'].iloc[-1]
+    rsi = df['rsi'].iloc[-1]
     adx = df['adx'].iloc[-1]
-    if adx > 25: return "Trend 💪 (رونددار)"
-    if adx < 20: return "Range 💤 (بدون روند)"
-    return "Stable ⚖️ (معمولی)"
-
-def calculate_management(price, sl, capital, risk_pct):
+    
+    # منطق جهت معامله
+    is_long = rsi > 50 and price > df['ema'].iloc[-1]
+    sig_type = "STRONG_LONG" if is_long else "STRONG_SHORT"
+    
+    # محاسبات SL و TP
+    sl_dist = 2.5 * atr
+    sl = price - sl_dist if is_long else price + sl_dist
+    tp1 = price + (sl_dist * 0.8) if is_long else price - (sl_dist * 0.8)
+    tp2 = price + (sl_dist * 1.5) if is_long else price - (sl_dist * 1.5)
+    tp3 = price + (sl_dist * 2.5) if is_long else price - (sl_dist * 2.5)
+    
+    # مدیریت سرمایه
     risk_amt = capital * (risk_pct / 100)
-    price_diff = abs(price - sl)
-    if price_diff == 0: return 0, 0
-    qty = risk_amt / price_diff
+    qty = risk_amt / abs(price - sl)
     pos_size = qty * price
-    return round(pos_size, 2), round(qty, 4)
-
-def get_targets(price, sl, signal_type):
-    diff = abs(price - sl)
-    if signal_type == "LONG":
-        return price + (diff * 0.8), price + (diff * 1.5), price + (diff * 2.5)
-    else:
-        return price - (diff * 0.8), price - (diff * 1.5), price - (diff * 2.5)
-
-def get_ml_probs(df):
-    # در اینجا منطق XGB و LSTM که قبلاً داشتیم اجرا می‌شود
-    # برای مثال خروجی فرضی:
-    return 48, 0 # XGB, LSTM
+    
+    return {
+        "price": price, "sig": sig_type, "sl": sl, "tp1": tp1, "tp2": tp2, "tp3": tp3,
+        "pos_size": pos_size, "qty": qty, "adx": adx, "rsi": rsi
+    }
