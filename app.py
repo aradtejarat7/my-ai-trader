@@ -7,7 +7,7 @@ from datetime import datetime
 import gc
 
 # ۱. تنظیمات اولیه صفحه
-st.set_page_config(page_title="AI-Crypto Elite v13", layout="centered")
+st.set_page_config(page_title="الگوریتم", layout="centered")
 apply_styles()
 
 st.markdown('<h2 style="text-align:center; color:#f0b90b;">💎 AI-CRYPTO ELITE v13.0</h2>', unsafe_allow_html=True)
