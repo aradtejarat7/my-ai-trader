@@ -10,7 +10,7 @@ import gc
 st.set_page_config(page_title="الگوریتم", layout="centered")
 apply_styles()
 
-st.markdown('<h2 style="text-align:center; color:#f0b90b;">💎 AI-CRYPTO ELITE v13.0</h2>', unsafe_allow_html=True)
+st.markdown('<h2 style="text-align:center; color:#f0b90b;">💎 الگوریتم</h2>', unsafe_allow_html=True)
 
 # ۲. منوی تاشو تنظیمات
 with st.expander("⚙️ تنظیمات سرمایه‌گذاری و ریسک"):
