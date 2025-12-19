@@ -5,6 +5,7 @@ import requests
 import time
 import ta
 import gc
+import ccxt
 from xgboost import XGBClassifier
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
@@ -12,9 +13,9 @@ from tensorflow.keras import backend as K
 from sklearn.preprocessing import MinMaxScaler
 from datetime import datetime
 
-# ==========================================
-# ۱. پیکربندی صفحه و استایل
-# ==========================================
+# =========================
+# ۱. تنظیمات و ظاهر (UI)
+# =========================
 st.set_page_config(page_title="AI-CRYPTO ELITE v14.0", layout="wide")
 
 st.markdown("""
@@ -27,11 +28,12 @@ st.markdown("""
 
 TOKEN = "8548739067:AAGuvMHgB-LxOoyQIrHWzs6ytTfOehfIrco"
 CHAT_ID = "163583693"
-CRYPTOS = {"bitcoin": "BTCUSDT", "ethereum": "ETHUSDT", "ripple": "XRPUSDT", "solana": "SOLUSDT"}
+# فرمت ارزها برای کوکوین
+CRYPTOS = {"bitcoin": "BTC/USDT", "ethereum": "ETH/USDT", "ripple": "XRP/USDT", "solana": "SOL/USDT"}
 
-# ==========================================
-# ۲. توابع داده و محاسبات
-# ==========================================
+# =========================
+# ۲. توابع ارتباطی و داده
+# =========================
 
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -39,52 +41,21 @@ def send_telegram(text):
         requests.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"}, timeout=5)
     except: pass
 
-def get_futures_info(symbol):
-    try:
-        f_url = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={symbol}"
-        oi_url = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}"
-        fund = float(requests.get(f_url, timeout=5).json().get("lastFundingRate", 0)) * 100
-        oi = float(requests.get(oi_url, timeout=5).json().get("openInterest", 0))
-        return fund, oi
-    except: return 0.0, 0.0
-
-import ccxt
-
 def get_data(coin, interval="1h"):
-    symbol = CRYPTOS.get(coin, "BTCUSDT")
-    # استفاده از CCXT برای پایداری بیشتر در سرورهای ابری
-    exchange = ccxt.binance({
-        'enableRateLimit': True,
-        'options': {'defaultType': 'spot'}
-    })
-    
-    for attempt in range(3): # ۳ بار تلاش مجدد در صورت خطا
-        try:
-            # دریافت داده‌های کندل استیک
-            ohlcv = exchange.fetch_ohlcv(symbol, timeframe=interval, limit=200)
-            if not ohlcv or len(ohlcv) < 100:
-                continue
-                
-            df = pd.DataFrame(ohlcv, columns=['ts', 'open', 'high', 'low', 'close', 'volume'])
-            df['ts'] = pd.to_datetime(df['ts'], unit='ms')
-            df["price"] = df["close"].astype(float)
-            df["high"] = df["high"].astype(float)
-            df["low"] = df["low"].astype(float)
-            df["volume"] = df["volume"].astype(float)
-            
-            # دریافت اطلاعات فاندینگ و OI (اختیاری و با مدیریت خطا)
-            try:
-                fund, oi = get_futures_info(symbol)
-                df["funding_rate"], df["open_interest"] = fund, oi
-            except:
-                df["funding_rate"], df["open_interest"] = 0.0, 0.0
-                
-            return df
-        except Exception as e:
-            time.sleep(1) # وقفه کوتاه قبل از تلاش مجدد
-            continue
-            
-    return None
+    symbol = CRYPTOS.get(coin, "BTC/USDT")
+    exchange = ccxt.kucoin({'enableRateLimit': True})
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=interval, limit=300)
+        if len(ohlcv) < 100: return None
+        df = pd.DataFrame(ohlcv, columns=['ts', 'open', 'high', 'low', 'close', 'volume'])
+        df['ts'] = pd.to_datetime(df['ts'], unit='ms')
+        df["price"] = df["close"].astype(float)
+        df["high"] = df["high"].astype(float)
+        df["low"] = df["low"].astype(float)
+        df["volume"] = df["volume"].astype(float)
+        df.set_index('ts', inplace=True)
+        return df
+    except: return None
 
 def add_indicators(df):
     try:
@@ -97,9 +68,9 @@ def add_indicators(df):
         return df.dropna()
     except: return None
 
-# ==========================================
-# ۳. توابع هوش مصنوعی
-# ==========================================
+# =========================
+# ۳. مدل‌های هوش مصنوعی
+# =========================
 
 def train_xgb(df):
     try:
@@ -126,67 +97,74 @@ def train_lstm(df):
         return 100 if pred > scaled[-1][0] else 0
     except: return 50
 
-# ==========================================
-# ۴. بخش اصلی اپلیکیشن (UI)
-# ==========================================
+# =========================
+# ۴. بدنه اصلی اپلیکیشن
+# =========================
 
-st.title("🚀 پنل هوش مصنوعی Elite v14.0")
+st.title("💎 پنل ترید هوشمند Elite AI")
 
 with st.sidebar:
-    st.header("⚙️ تنظیمات")
-    capital = st.number_input("سرمایه (USD)", value=1000)
-    risk_pct = st.slider("ریسک (%)", 1.0, 5.0, 2.0)
+    st.header("⚙️ مدیریت سرمایه")
+    capital = st.number_input("سرمایه کل (USD)", value=1000)
+    risk_pct = st.slider("درصد ریسک هر معامله", 1.0, 5.0, 2.0)
+    st.info("داده‌ها از صرافی Kucoin دریافت می‌شوند.")
 
-col1, col2 = st.columns(2)
-with col1:
+c1, c2 = st.columns(2)
+with c1:
     coin_select = st.selectbox("انتخاب ارز:", list(CRYPTOS.keys()))
-with col2:
+with c2:
     tf_select = st.selectbox("تایم‌فریم:", ["15m", "1h", "4h", "1d"])
 
-if st.button("🔍 شروع تحلیل هوشمند"):
-    with st.spinner('در حال پردازش مدل‌های هوشمند...'):
+if st.button("🚀 تحلیل و صدور سیگنال"):
+    with st.spinner('در حال پردازش داده‌ها و آموزش مدل‌ها...'):
         raw_df = get_data(coin_select, tf_select)
         df = add_indicators(raw_df)
         
         if df is not None and not df.empty:
+            # آموزش مدل‌ها
             xgb_p = train_xgb(df)
             lstm_p = train_lstm(df)
             
+            # محاسبات قیمت و روند
             price = df['price'].iloc[-1]
             ensemble = (xgb_p * 0.5) + (lstm_p * 0.5)
             adx = df['adx'].iloc[-1]
-            
-            # منطق سیگنال
-            signal = "صبر / خنثی ⬜"
-            if ensemble > 70 and adx > 18: signal = "خرید (LONG) 🟩"
-            elif ensemble < 30 and adx > 18: signal = "فروش (SHORT) 🟥"
-            
-            # محاسبات مدیریت سرمایه
             atr = df['atr'].iloc[-1]
+            
+            # منطق سیگنال (دقیقاً مشابه نسخه ۱۳ شما)
+            signal_text = "خنثی / صبر ⬜"
+            if ensemble > 70 and adx > 18: signal_text = "خرید (LONG) 🟩"
+            elif ensemble < 30 and adx > 18: signal_text = "فروش (SHORT) 🟥"
+            
+            # مدیریت ریسک
             sl = price - (2.5 * atr) if ensemble > 50 else price + (2.5 * atr)
             tp = price + (1.5 * abs(price - sl)) if ensemble > 50 else price - (1.5 * abs(price - sl))
             
-            # نمایش خروجی
+            # نمایش خروجی در اپلیکیشن
             st.divider()
             m1, m2, m3 = st.columns(3)
             m1.metric("قیمت لحظه‌ای", f"${price:.4f}")
-            m2.metric("اطمینان مدل", f"{ensemble:.1f}%")
-            m3.metric("سیگنال", signal)
+            m2.metric("اطمینان هوش مصنوعی", f"{ensemble:.1f}%")
+            m3.metric("سیگنال نهایی", signal_text)
             
             res_c1, res_c2 = st.columns(2)
             with res_c1:
-                st.success(f"🎯 حد سود: {tp:.4f}")
-                st.error(f"🛡️ حد ضرر: {sl:.4f}")
+                st.success(f"🎯 تارگت پیشنهادی: {tp:.4f}")
+                st.error(f"🛡️ حد ضرر (SL): {sl:.4f}")
             with res_c2:
                 risk_amt = capital * (risk_pct / 100)
                 pos_size = risk_amt / abs(price - sl) * price
-                st.info(f"📏 حجم پیشنهادی: ${pos_size:.2f}")
+                st.info(f"📏 حجم پوزیشن: ${pos_size:.2f}")
 
-            # ارسال تلگرام
-            msg = f"🚀 سیگنال جدید {coin_select.upper()}\n💰 قیمت: {price}\n📊 قدرت: {ensemble:.1f}%\n🎯 هدف: {tp:.4f}"
-            send_telegram(msg)
+            # ارسال پیام به تلگرام
+            tg_msg = f"🚀 **سیگنال جدید {coin_select.upper()}**\n"
+            tg_msg += f"وضعیت: {signal_text}\n"
+            tg_msg += f"قیمت: {price:.4f}\n"
+            tg_msg += f"قدرت پیش‌بینی: {ensemble:.1f}%\n"
+            tg_msg += f"تارگت: {tp:.4f} | استاپ: {sl:.4f}"
+            send_telegram(tg_msg)
+            
         else:
-            st.error("❌ خطا در دریافت دیتا. لطفاً دوباره تلاش کنید.")
+            st.error("❌ خطا در دریافت یا پردازش دیتا. لطفاً تایم‌فریم را تغییر دهید.")
 
-# پاکسازی خودکار حافظه
 gc.collect()
