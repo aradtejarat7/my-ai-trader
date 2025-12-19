@@ -60,28 +60,48 @@ def get_data(coin, interval="1h", candles=1000):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={candles}"
     try:
         r = requests.get(url, timeout=20)
+        if r.status_code != 200: return None
         data = r.json()
+        
+        # بررسی اینکه آیا حداقل ۱۰۰ کندل برای محاسبات موجود است
+        if len(data) < 100: return None
+        
         df = pd.DataFrame(data, columns=["ts", "open", "high", "low", "close", "volume", "ct", "qav", "nt", "tb", "tq", "i"])
-        df["ts"] = pd.to_datetime(df["ts"], unit="ms")
         df["price"] = df["close"].astype(float)
         df["high"] = df["high"].astype(float)
         df["low"] = df["low"].astype(float)
         df["volume"] = df["volume"].astype(float)
+        
         funding, oi = get_futures_info(symbol)
         df["funding_rate"], df["open_interest"] = funding, oi
+        df["ts"] = pd.to_datetime(df["ts"], unit="ms")
         df.set_index("ts", inplace=True)
         return df
-    except: return None
+    except Exception as e:
+        return None
 
 def add_indicators(df):
-    df["rsi"] = ta.momentum.RSIIndicator(df["price"]).rsi()
-    df["macd"] = ta.trend.MACD(df["price"]).macd_diff()
-    df["adx"] = ta.trend.ADXIndicator(df["high"], df["low"], df["price"]).adx()
-    df["ema"] = ta.trend.EMAIndicator(df["price"], 20).ema_indicator()
-    df["atr"] = ta.volatility.AverageTrueRange(df["high"], df["low"], df["price"]).average_true_range()
-    df["vol_ratio"] = df["volume"] / df["volume"].rolling(window=20).mean()
-    df["oi_change"] = df["open_interest"].pct_change() * 100
-    return df.dropna()
+    try:
+        # اگر تعداد ردیف‌ها کمتر از ۵۰ باشد، محاسبات ADX خطا می‌دهد
+        if df is None or len(df) < 50:
+            return None
+            
+        df["rsi"] = ta.momentum.RSIIndicator(df["price"]).rsi()
+        df["macd"] = ta.trend.MACD(df["price"]).macd_diff()
+        
+        # ADX با پنجره ۱۴ تایی
+        adx_ind = ta.trend.ADXIndicator(df["high"], df["low"], df["price"], window=14)
+        df["adx"] = adx_ind.adx()
+        
+        df["ema"] = ta.trend.EMAIndicator(df["price"], 20).ema_indicator()
+        df["atr"] = ta.volatility.AverageTrueRange(df["high"], df["low"], df["price"]).average_true_range()
+        df["vol_ratio"] = df["volume"] / df["volume"].rolling(window=20).mean()
+        df["oi_change"] = df["open_interest"].pct_change() * 100
+        
+        return df.dropna()
+    except Exception as e:
+        return None
+
 
 # --- توابع ML با بهبود پایداری ---
 def train_xgb(df):
