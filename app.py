@@ -48,21 +48,43 @@ def get_futures_info(symbol):
         return fund, oi
     except: return 0.0, 0.0
 
+import ccxt
+
 def get_data(coin, interval="1h"):
     symbol = CRYPTOS.get(coin, "BTCUSDT")
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit=500"
-    try:
-        r = requests.get(url, timeout=10).json()
-        if len(r) < 100: return None
-        df = pd.DataFrame(r, columns=["ts", "open", "high", "low", "close", "volume", "ct", "qav", "nt", "tb", "tq", "i"])
-        df["price"] = df["close"].astype(float)
-        df["high"] = df["high"].astype(float)
-        df["low"] = df["low"].astype(float)
-        df["volume"] = df["volume"].astype(float)
-        fund, oi = get_futures_info(symbol)
-        df["funding_rate"], df["open_interest"] = fund, oi
-        return df
-    except: return None
+    # استفاده از CCXT برای پایداری بیشتر در سرورهای ابری
+    exchange = ccxt.binance({
+        'enableRateLimit': True,
+        'options': {'defaultType': 'spot'}
+    })
+    
+    for attempt in range(3): # ۳ بار تلاش مجدد در صورت خطا
+        try:
+            # دریافت داده‌های کندل استیک
+            ohlcv = exchange.fetch_ohlcv(symbol, timeframe=interval, limit=200)
+            if not ohlcv or len(ohlcv) < 100:
+                continue
+                
+            df = pd.DataFrame(ohlcv, columns=['ts', 'open', 'high', 'low', 'close', 'volume'])
+            df['ts'] = pd.to_datetime(df['ts'], unit='ms')
+            df["price"] = df["close"].astype(float)
+            df["high"] = df["high"].astype(float)
+            df["low"] = df["low"].astype(float)
+            df["volume"] = df["volume"].astype(float)
+            
+            # دریافت اطلاعات فاندینگ و OI (اختیاری و با مدیریت خطا)
+            try:
+                fund, oi = get_futures_info(symbol)
+                df["funding_rate"], df["open_interest"] = fund, oi
+            except:
+                df["funding_rate"], df["open_interest"] = 0.0, 0.0
+                
+            return df
+        except Exception as e:
+            time.sleep(1) # وقفه کوتاه قبل از تلاش مجدد
+            continue
+            
+    return None
 
 def add_indicators(df):
     try:
